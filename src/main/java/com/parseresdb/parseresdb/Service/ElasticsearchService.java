@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -37,19 +38,34 @@ public class ElasticsearchService {
 
     private  ApiMetadataRepository apiMetadataRepository;
 
-    public JsonNode fetchData(String connectionName, String dataset, String gte, String lte) throws IOException {
-        // Step 1: Fetch clusterUrl from connections table
-        Optional<Connection> connectionOpt = connectionRepository.findByConnectionName(connectionName);
-        if (connectionOpt.isEmpty()) {
-            throw new RuntimeException("Connection not found: " + connectionName);
+    public JsonNode fetchData(Connection connection, String gte, String lte) throws IOException {
+        // Extract details JSON
+        JsonNode details = objectMapper.readTree(connection.getDetails());
+        String clusterUrl = details.get("clusterURL").asText();
+        String dataset = details.get("dataset").asText();
+
+        // Extract identifier for RequestTime
+        String timeField = "RequestTime"; // Default if not found
+        // Extract identifier for ResourcePath
+        String resourcePathField = "ResourcePath"; // Default if not found
+        for (JsonNode field : details.get("fields")) {
+            if ("RequestTime".equals(field.get("field").asText())) {
+                timeField = field.get("identifier").asText();
+
+            }
+            if ("ResourcePath".equals(field.get("field").asText())) {
+                resourcePathField = field.get("path").asText();
+
+            }
         }
 
-        String clusterUrl = extractClusterUrl(connectionOpt.get().getDetails());
+        // Fetch enabled APIs and extract their resource paths
+        List<ApiMetadata> enabledApis = apiMetadataRepository.findByConnectionNameAndStatus(connection.getConnectionName(), "enabled");
+        List<String> enabledResourcePaths = enabledApis.stream()
+                .map(ApiMetadata::getResourcePath)
+                .collect(Collectors.toList());
 
-        // Construct Elasticsearch URL
-        String url = clusterUrl + "/" + dataset + "/_search";
-
-        // Step 2: Build Elasticsearch Query
+        // Construct Elasticsearch Query with timeField and ResourcePath filtering
         String queryJson = "{\n" +
                 "  \"size\": 1000,\n" +
                 "  \"query\": {\n" +
@@ -57,10 +73,15 @@ public class ElasticsearchService {
                 "      \"must\": [\n" +
                 "        {\n" +
                 "          \"range\": {\n" +
-                "            \"RequestTime\": {\n" +
+                "            \"" + timeField + "\": {\n" +
                 "              \"gte\": \"" + gte + "\",\n" +
                 "              \"lte\": \"" + lte + "\"\n" +
                 "            }\n" +
+                "          }\n" +
+                "        },\n" +
+                "        {\n" +
+                "          \"terms\": {\n" +
+                "            \"" + resourcePathField + "\": " + objectMapper.writeValueAsString(enabledResourcePaths) + "\n" +
                 "          }\n" +
                 "        }\n" +
                 "      ]\n" +
@@ -68,9 +89,8 @@ public class ElasticsearchService {
                 "  }\n" +
                 "}";
 
-
-
         // Step 3: Execute request
+        String url = clusterUrl + "/" + dataset + "/_search";
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
@@ -81,10 +101,6 @@ public class ElasticsearchService {
     }
 
 
-    private String extractClusterUrl(String detailsJson) throws IOException {
-        JsonNode jsonNode = objectMapper.readTree(detailsJson);
-        return jsonNode.get("clusterURL").asText();
-    }
     // Helper method to send data to Elasticsearch
     public boolean indexToElasticsearch(Map<String, Object> data) {
         try {

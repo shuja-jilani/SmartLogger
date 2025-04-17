@@ -24,7 +24,7 @@ public class DataFetchScheduler {
         this.objectMapper = objectMapper;
     }
 
-    @Scheduled(fixedRate = 120000) // Runs every 2 minutes (120000ms)
+//    @Scheduled(fixedRate = 120000) // Runs every 2 minutes (120000ms)
     public void fetchAndFeedDataAutomatically() {
         Instant now = Instant.now(); // Current time
         Instant twoMinutesAgo = now.minusSeconds(120); // Subtract 2 minutes

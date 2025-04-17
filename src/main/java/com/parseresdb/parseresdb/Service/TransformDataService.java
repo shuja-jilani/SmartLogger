@@ -2,6 +2,7 @@ package com.parseresdb.parseresdb.Service;
 
 import com.parseresdb.parseresdb.Entity.ApiMetadata;
 import com.parseresdb.parseresdb.Entity.ApiMetadataField;
+import com.parseresdb.parseresdb.Repository.ApiMetadataFieldRepository;
 import com.parseresdb.parseresdb.Repository.ApiMetadataRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,37 +23,34 @@ public class TransformDataService {
     private final DatabaseService databaseService;
     private final ApiMetadataRepository apiMetadataRepository;
     private final ObjectMapper objectMapper;
+    private final ApiMetadataFieldRepository apiMetadataFieldRepository;
 
-    public TransformDataService(DatabaseService databaseService, ApiMetadataRepository apiMetadataRepository, ObjectMapper objectMapper) {
+    public TransformDataService(DatabaseService databaseService, ApiMetadataRepository apiMetadataRepository, ObjectMapper objectMapper, ApiMetadataFieldRepository apiMetadataFieldRepository) {
         this.databaseService = databaseService;
         this.apiMetadataRepository = apiMetadataRepository;
         this.objectMapper = objectMapper;
+        this.apiMetadataFieldRepository = apiMetadataFieldRepository;
     }
-    public List<Map<String, Object>> transformData(JsonNode rawData) {
-        // Get fields grouped by API
-        Map<UUID, List<ApiMetadataField>> fieldsByApi = databaseService.getFieldsGroupedByApi();
-        List<Map<String, Object>> transformedList = new ArrayList<>();
+    public Map<String, Object> transformData(JsonNode source, String pathToResourcePath) {
+        Map<String, Object> transformedData = new HashMap<>();
 
-        for (JsonNode hit : rawData.get("hits").get("hits")) {
-            Map<String, Object> transformedData = new HashMap<>();
-            JsonNode source = hit.get("_source");
 
             // Extract resourcePath to determine the API
-            Optional<JsonNode> resourcePathNode = getValueFromPath(source, "ResourcePath");
+            Optional<JsonNode> resourcePathNode = getValueFromPath(source, pathToResourcePath);
             if (!resourcePathNode.isPresent()) {
-                continue; // Skip if no resourcePath found
+                return null; // Skip if no resourcePath found
             }
             String resourcePath = resourcePathNode.get().asText();
 
             // Find the API that matches this resourcePath
             ApiMetadata matchingApi = apiMetadataRepository.findByResourcePathAndStatus(resourcePath, "enabled");
             if (matchingApi == null) {
-                continue; // Skip if no matching API is found
+                return null; // Skip if no matching api found
             }
-            UUID apiMetadataId = matchingApi.getUniqueId();
+
 
             // Get fields specific to this API
-            List<ApiMetadataField> fields = fieldsByApi.getOrDefault(apiMetadataId, Collections.emptyList());
+            List<ApiMetadataField> fields = apiMetadataFieldRepository.findByApiMetadataId(matchingApi.getUniqueId());
 
             // Extract request headers and payload
             Optional<JsonNode> requestNode = getValueFromPath(source, "request");
@@ -147,10 +145,7 @@ public class TransformDataService {
                 transformedData.put("Role", rolesArrayNode);
             }
 
-            transformedList.add(transformedData);
-        }
-
-        return transformedList;
+        return transformedData;
     }
 
     private Optional<JsonNode> getValueFromPath(JsonNode node, String path) {

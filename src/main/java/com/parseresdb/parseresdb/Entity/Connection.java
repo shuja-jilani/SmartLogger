@@ -11,6 +11,16 @@ public class Connection {
     @Id
     @Column(name = "connectionname")
     private String connectionName;
+@Column(name = "connectiontype")
+    private String connectionType;
+
+    public String getConnectiontype() {
+        return connectionType;
+    }
+
+    public void setConnectiontype(String connectiontype) {
+        this.connectionType = connectiontype;
+    }
 
     public String getDetails() {
         return details;
@@ -20,7 +30,7 @@ public class Connection {
         this.details = details;
     }
 
-    @Column(name = "details") // Store JSON as text
+    @Column(name = "details", length = 2000) // Store JSON as text
     private String details;
     public String getConnectionName() {
         return connectionName;

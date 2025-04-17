@@ -1,10 +1,11 @@
 package com.parseresdb.parseresdb.Controller;
 
 import com.fasterxml.jackson.databind.node.TextNode;
+import com.parseresdb.parseresdb.Entity.Connection;
+import com.parseresdb.parseresdb.Repository.ConnectionRepository;
 import com.parseresdb.parseresdb.Service.DatabaseService;
 import com.parseresdb.parseresdb.Service.ElasticsearchService;
 import com.fasterxml.jackson.databind.JsonNode;
-import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,43 +14,35 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/data")
-@RequiredArgsConstructor
 public class ElasticsearchController {
 
     private final ElasticsearchService elasticsearchService;
-    private final DatabaseService databaseService;
+    private final ConnectionRepository connectionRepository;
+
+    public ElasticsearchController(ElasticsearchService elasticsearchService, DatabaseService databaseService, ConnectionRepository connectionRepository) {
+        this.elasticsearchService = elasticsearchService;
+        this.connectionRepository = connectionRepository;
+    }
 
     @GetMapping("/fetch")
     public ResponseEntity<Map<String, JsonNode>> fetchData(
-            @RequestParam String connectionName,
             @RequestParam String gte,
             @RequestParam String lte) throws IOException {
 
-        // Get datasets for the given connection
-        List<String> datasets = databaseService.getDatasetsGroupedByConnection()
-                .getOrDefault(connectionName, Collections.emptyList());
+        List<Connection> connections = connectionRepository.findByConnectionType("elasticsearch"); // Fetch only Elasticsearch connections
+        Map<String, JsonNode> responseMap = new HashMap<>();
 
-        if (datasets.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(Collections.singletonMap("error",
-                            TextNode.valueOf("No datasets found for connection: " + connectionName)));
+        for (Connection connection : connections) {
+            JsonNode rawData = elasticsearchService.fetchData(connection, gte, lte);
+            responseMap.put(connection.getConnectionName(), rawData); // Store raw data with connection name as key
         }
 
-        // Map to store raw data for each dataset
-        Map<String, JsonNode> rawDataByDataset = new HashMap<>();
-
-        for (String dataset : datasets) {
-            JsonNode rawData = elasticsearchService.fetchData(connectionName, dataset, gte, lte);
-            rawDataByDataset.put(dataset, rawData);
-        }
-
-        return ResponseEntity.ok(rawDataByDataset);
+        return ResponseEntity.ok(responseMap);
     }
 }
