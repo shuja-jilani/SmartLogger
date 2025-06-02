@@ -2,13 +2,20 @@ package com.parseresdb.parseresdb.Service.kafka;
 
 import com.fasterxml.jackson.core.ObjectCodec;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.parseresdb.parseresdb.Entity.Connection;
+import com.parseresdb.parseresdb.Service.DatabaseService;
 import com.parseresdb.parseresdb.Service.ElasticsearchService;
 import com.parseresdb.parseresdb.Service.TransformDataService;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.JsonNode;
+
+import java.sql.Timestamp;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -21,10 +28,13 @@ public class KafkaConsumerService {
     private final KafkaProducerService kafkaProducerService;
     // Atomic counter for thread-safe tracking
     private final AtomicInteger processedCount = new AtomicInteger(0);
-    public KafkaConsumerService(TransformDataService transformDataService, ElasticsearchService elasticsearchService, KafkaProducerService kafkaProducerService) {
+    private final DatabaseService databaseService;
+
+    public KafkaConsumerService(TransformDataService transformDataService, ElasticsearchService elasticsearchService, KafkaProducerService kafkaProducerService, DatabaseService databaseService) {
         this.transformDataService = transformDataService;
         this.elasticsearchService = elasticsearchService;
         this.kafkaProducerService = kafkaProducerService;
+        this.databaseService = databaseService;
     }
 
     @KafkaListener(topics = "raw-data-topic", groupId = "transform-group")
@@ -32,19 +42,36 @@ public class KafkaConsumerService {
         try {
             ObjectMapper objectMapper = new ObjectMapper();
             JsonNode messageNode = objectMapper.readTree(message);
+            Connection connection = objectMapper.treeToValue(messageNode.get("connection"), Connection.class);
 
-            JsonNode rawData = messageNode.get("source");
-            String pathToResourcePath = messageNode.get("pathToResourcePath").asText();
+            String connectionType = connection.getConnectiontype();
+            System.out.println("DEBUG: Connection Type = " + connectionType);
+            Map<String, Object> transformedData = null;
+            if ("elasticsearch".equalsIgnoreCase(connectionType)) {
 
-            System.out.println("Received from Kafka: " + rawData);
+                JsonNode rawData = messageNode.get("source");
 
-            // Process each record using transformData
-            Map<String, Object> transformedData = transformDataService.transformData(rawData, pathToResourcePath);
+                System.out.println("Received from Kafka: " + rawData);
 
+                // Process each record using transformData
+                transformedData = transformDataService.transformData(rawData, connection);
+            } else if ("database".equalsIgnoreCase(connectionType)) {
+                JsonNode rawData = messageNode.get("source");
+
+                System.out.println("Received from Kafka (DB): " + rawData);
+                transformedData = transformDataService.transformDBData(rawData, connection);
+
+            }
+            boolean isIndexed = false;
             // Send transformed data to Elasticsearch
-            boolean isIndexed = elasticsearchService.indexToElasticsearch(transformedData);
-            if (isIndexed) {
-                processedCount.incrementAndGet(); // Increment counter when data is indexed successfully
+            if(transformedData!=null) {
+                isIndexed = elasticsearchService.indexToElasticsearch(transformedData);
+            }
+            if (isIndexed){
+                processedCount.incrementAndGet();
+                System.out.println("Data was indexed successfully, count increment.");// Increment counter when data is indexed successfully
+            }else {
+                System.out.println("Data was not indexed successfully. Skipping count increment.");
             }
 
         } catch (Exception e) {
@@ -62,40 +89,78 @@ public class KafkaConsumerService {
         try {
             // Deserialize JSON into Connection class
             ObjectMapper objectMapper = new ObjectMapper();
+//            objectMapper.registerModule(new JavaTimeModule());
+//            objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
             JsonNode messageNode = objectMapper.readTree(message);
 
             Connection connection = objectMapper.treeToValue(messageNode.get("connection"), Connection.class);
             String gte = messageNode.get("gte").asText();
             String lte = messageNode.get("lte").asText();
+            String connectionType = connection.getConnectiontype();
+            System.out.println("DEBUG: Connection Type = " + connectionType);
+            if ("elasticsearch".equalsIgnoreCase(connectionType)) {
 
-            // Fetch data from Elasticsearch
-            JsonNode rawData = elasticsearchService.fetchData(connection, gte, lte);
+                // Fetch from Elasticsearch
+                JsonNode rawData = elasticsearchService.fetchData(connection, gte, lte);
 
-            // Extract `pathToResourcePath`
-            JsonNode details = objectMapper.readTree(connection.getDetails());
-            String pathToResourcePath = "ResourcePath"; // Default
-            for (JsonNode field : details.get("fields")) {
-                if ("ResourcePath".equals(field.get("field").asText())) {
-                    pathToResourcePath = field.get("path").asText();
-                    break;
+                JsonNode hitsArray = rawData.path("hits").path("hits");
+                if (hitsArray != null && hitsArray.isArray()) {
+                    for (JsonNode hit : hitsArray) {
+                        JsonNode source = hit.get("_source");
+
+                        ObjectNode enrichedMessage = objectMapper.createObjectNode();
+                        enrichedMessage.putPOJO("connection", connection);
+                        enrichedMessage.set("source", source);
+
+                        System.out.println("DEBUG: Sending to Kafka -> " + enrichedMessage);
+                        kafkaProducerService.sendRawData(enrichedMessage);
+                    }
+                } else {
+                    System.out.println("DEBUG: No hits found in Elasticsearch response.");
                 }
+
+            } else if ("database".equalsIgnoreCase(connectionType)) {
+                try {
+
+                    List<Map<String, Object>> records = databaseService.fetchTableData(connection, gte, lte);
+
+                    for (Map<String, Object> row : records) {
+                        ObjectNode enrichedMessage = objectMapper.createObjectNode();
+
+                        // 🔽 Convert timestamps to formatted strings manually
+                        Map<String, Object> normalizedRow = new HashMap<>();
+                        for (Map.Entry<String, Object> entry : row.entrySet()) {
+                            Object value = entry.getValue();
+                            if (value instanceof Timestamp) {
+                                String formatted = value.toString(); // or use DateTimeFormatter if needed
+                                normalizedRow.put(entry.getKey(), formatted);
+                            } else {
+                                normalizedRow.put(entry.getKey(), value);
+                            }
+                        }
+                        enrichedMessage.putPOJO("connection", connection);
+                        enrichedMessage.set("source", objectMapper.valueToTree(normalizedRow));
+
+                        System.out.println("DEBUG: Sending DB record to Kafka -> " + enrichedMessage);
+                        kafkaProducerService.sendRawData(enrichedMessage);
+                    }
+
+                    if (records.isEmpty()) {
+                        System.out.println("DEBUG: No records found in DB table for given time range.");
+                    }
+
+                } catch (Exception e) {
+                    System.err.println("ERROR: Failed to fetch or send DB records: " + e.getMessage());
+                    e.printStackTrace();
+                }
+
+            } else {
+                System.out.println("WARN: Unsupported connection type: " + connectionType);
             }
-
-            // Publish each record to Kafka along with `pathToResourcePath`
-            for (JsonNode hit : rawData.get("hits").get("hits")) {
-                JsonNode source = hit.get("_source");
-
-                ObjectNode enrichedMessage = objectMapper.createObjectNode();
-                enrichedMessage.set("source", source);
-                enrichedMessage.put("pathToResourcePath", pathToResourcePath);
-                System.out.println("DEBUG: Sending to Kafka -> " + enrichedMessage); // Debug line
-                kafkaProducerService.sendRawData(enrichedMessage);
-            }
-
-            System.out.println("Processed connection: " + connection.getConnectionName() + " | Data sent to raw-data-topic");
 
         } catch (Exception e) {
             System.err.println("Error processing connection message: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 

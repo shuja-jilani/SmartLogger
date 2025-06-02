@@ -53,17 +53,17 @@ public class TestController {
     @Autowired
     private DatabaseService databaseService;
     // 🔥 New Endpoint: Fetch fields using DatabaseService
-    @GetMapping("/fetch-fields")
-    public ResponseEntity<Map<UUID, List<ApiMetadataField>>> fetchFields() {
-        Map<UUID, List<ApiMetadataField>> fieldsGroupedByApi = databaseService.getFieldsGroupedByApi();
-        return fieldsGroupedByApi.isEmpty() ? ResponseEntity.noContent().build() : ResponseEntity.ok(fieldsGroupedByApi);
-    }
+//    @GetMapping("/fetch-fields")
+//    public ResponseEntity<Map<UUID, List<ApiMetadataField>>> fetchFields() {
+//        Map<UUID, List<ApiMetadataField>> fieldsGroupedByApi = databaseService.getFieldsGroupedByApi();
+//        return fieldsGroupedByApi.isEmpty() ? ResponseEntity.noContent().build() : ResponseEntity.ok(fieldsGroupedByApi);
+//    }
 
-    @GetMapping("/datasets")
-    public ResponseEntity<Map<String, List<String>>> getDatasetsGroupedByConnection() {
-        Map<String, List<String>> datasetsByConnection = databaseService.getDatasetsGroupedByConnection();
-        return ResponseEntity.ok(datasetsByConnection);
-    }
+//    @GetMapping("/datasets")
+//    public ResponseEntity<Map<String, List<String>>> getDatasetsGroupedByConnection() {
+//        Map<String, List<String>> datasetsByConnection = databaseService.getDatasetsGroupedByConnection();
+//        return ResponseEntity.ok(datasetsByConnection);
+//    }
 
 
 }

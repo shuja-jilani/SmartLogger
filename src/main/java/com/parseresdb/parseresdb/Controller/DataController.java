@@ -116,6 +116,25 @@ public Map<String, Object> fetchAndPublish(@RequestParam String gte, @RequestPar
 
     return Collections.singletonMap("message", "Connections published to Kafka.");
 }
+@GetMapping("/fetch-and-publish-db")
+public Map<String, Object> fetchAndPublishForDB(@RequestParam String gte, @RequestParam String lte) {
+    List<Connection> connections = connectionRepository.findByConnectionType("database"); // Filter by type
+
+    if (connections.isEmpty()) {
+        return Collections.singletonMap("message", "No Elasticsearch connections found.");
+    }
+
+    for (Connection connection : connections) {
+        ObjectNode message = new ObjectMapper().createObjectNode();
+        message.putPOJO("connection", connection);
+        message.put("gte", gte);
+        message.put("lte", lte);
+
+        kafkaProducerService.sendConnectionData(message);
+    }
+
+    return Collections.singletonMap("message", "Connections published to Kafka.");
+}
 
     @GetMapping("/processed-count")
     public Map<String, Object> getProcessedCount() {

@@ -53,18 +53,7 @@ public class ElasticsearchService {
                 timeField = field.get("identifier").asText();
 
             }
-            if ("ResourcePath".equals(field.get("field").asText())) {
-                resourcePathField = field.get("path").asText();
-
-            }
         }
-
-        // Fetch enabled APIs and extract their resource paths
-        List<ApiMetadata> enabledApis = apiMetadataRepository.findByConnectionNameAndStatus(connection.getConnectionName(), "enabled");
-        List<String> enabledResourcePaths = enabledApis.stream()
-                .map(ApiMetadata::getResourcePath)
-                .collect(Collectors.toList());
-
         // Construct Elasticsearch Query with timeField and ResourcePath filtering
         String queryJson = "{\n" +
                 "  \"size\": 1000,\n" +
@@ -78,16 +67,12 @@ public class ElasticsearchService {
                 "              \"lte\": \"" + lte + "\"\n" +
                 "            }\n" +
                 "          }\n" +
-                "        },\n" +
-                "        {\n" +
-                "          \"terms\": {\n" +
-                "            \"" + resourcePathField + "\": " + objectMapper.writeValueAsString(enabledResourcePaths) + "\n" +
-                "          }\n" +
                 "        }\n" +
                 "      ]\n" +
                 "    }\n" +
                 "  }\n" +
                 "}";
+
 
         // Step 3: Execute request
         String url = clusterUrl + "/" + dataset + "/_search";

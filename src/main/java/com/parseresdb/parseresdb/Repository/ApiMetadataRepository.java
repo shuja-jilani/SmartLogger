@@ -10,5 +10,5 @@ import java.util.UUID;
 @Repository
 public interface ApiMetadataRepository extends JpaRepository<ApiMetadata, UUID> {
     List<ApiMetadata> findByConnectionNameAndStatus(String connectionName, String status);
-    ApiMetadata findByResourcePathAndStatus(String resourcePath, String status);
+    ApiMetadata findByResourcePath(String resourcePath);
 }

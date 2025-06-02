@@ -24,28 +24,37 @@ public class DataFetchScheduler {
         this.objectMapper = objectMapper;
     }
 
-//    @Scheduled(fixedRate = 120000) // Runs every 2 minutes (120000ms)
-    public void fetchAndFeedDataAutomatically() {
-        Instant now = Instant.now(); // Current time
-        Instant twoMinutesAgo = now.minusSeconds(120); // Subtract 2 minutes
+//    @Scheduled(fixedRate = 120000) // Runs every 2 minutes
+    public void publishConnectionsAutomatically() {
+        Instant now = Instant.now();
+        Instant twoMinutesAgo = now.minusSeconds(120);
 
-        String gte = FORMATTER.format(twoMinutesAgo); // Format as ISO 8601
+        String gte = FORMATTER.format(twoMinutesAgo);
         String lte = FORMATTER.format(now);
 
-        String url = "http://localhost:8082/api/data/fetch-and-feed?gte=" + gte + "&lte=" + lte;
+        String esUrl = "http://localhost:8082/fetch-and-publish?gte=" + gte + "&lte=" + lte;
+        String dbUrl = "http://localhost:8082/fetch-and-publish-db?gte=" + gte + "&lte=" + lte;
 
         try {
-            String jsonResponse = restTemplate.getForObject(url, String.class);
-
-            if (jsonResponse != null) {
-                JsonNode jsonNode = objectMapper.readTree(jsonResponse);
-                int indexedCount = jsonNode.has("indexedCount") ? jsonNode.get("indexedCount").asInt() : 0;
-                System.out.println("Auto Fetch & Feed Triggered: " + indexedCount + " records processed." + " For url : " + url);
-            } else {
-                System.out.println("Auto Fetch & Feed Triggered: No response received.");
+            // Call ES publishing endpoint
+            String esResponse = restTemplate.getForObject(esUrl, String.class);
+            if (esResponse != null) {
+                JsonNode jsonNode = objectMapper.readTree(esResponse);
+                String message = jsonNode.has("message") ? jsonNode.get("message").asText() : "No ES message.";
+                System.out.println("Auto Publish (ES): " + message + " | URL: " + esUrl);
             }
+
+            // Call DB publishing endpoint
+            String dbResponse = restTemplate.getForObject(dbUrl, String.class);
+            if (dbResponse != null) {
+                JsonNode jsonNode = objectMapper.readTree(dbResponse);
+                String message = jsonNode.has("message") ? jsonNode.get("message").asText() : "No DB message.";
+                System.out.println("Auto Publish (DB): " + message + " | URL: " + dbUrl);
+            }
+
         } catch (Exception e) {
-            System.err.println("Error while calling fetch-and-feed: " + e.getMessage());
+            System.err.println("Error during scheduled publish: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
