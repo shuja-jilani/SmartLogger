@@ -59,7 +59,18 @@ public class KafkaConsumerService {
                 JsonNode rawData = messageNode.get("source");
 
                 System.out.println("Received from Kafka (DB): " + rawData);
-                transformedData = transformDataService.transformDBData(rawData, connection);
+                JsonNode details = objectMapper.readTree(connection.getDetails());
+
+                if (details.has("fields") && details.get("fields").isArray() && details.get("fields").size() > 0) {
+                    // 🔧 Use existing transformation logic (column-level mapping)
+                    transformedData = transformDataService.transformDBData(rawData, connection);
+                } else if (details.has("sqlQuery") && !details.get("sqlQuery").isNull()) {
+                    // 🆕 Use new transformation for aggregated query result
+                    transformedData = transformDataService.transformDBDataForQuery(rawData, connection);
+                } else {
+                    System.err.println("ERROR: Connection missing both 'fields' and 'sqlQuery'");
+                    return; // skip further processing
+                }
 
             }
             boolean isIndexed = false;
@@ -127,7 +138,7 @@ public class KafkaConsumerService {
                     for (Map<String, Object> row : records) {
                         ObjectNode enrichedMessage = objectMapper.createObjectNode();
 
-                        // 🔽 Convert timestamps to formatted strings manually
+                        // Convert timestamps to formatted strings manually
                         Map<String, Object> normalizedRow = new HashMap<>();
                         for (Map.Entry<String, Object> entry : row.entrySet()) {
                             Object value = entry.getValue();

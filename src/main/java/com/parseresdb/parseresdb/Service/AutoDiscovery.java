@@ -52,7 +52,7 @@ public class AutoDiscovery {
             databaseService.insertApiMetadata(uniqueId, connectionName, dataset, resourcePath, roleNames, status, resourcePath);
             // Insert fields into api_metadata_field table
             JsonNode fields = details.get("fields");
-            if (fields != null && fields.isArray()) {
+            if (fields != null && fields.isArray() && fields.size() > 0) {
                 for (JsonNode fieldNode : fields) {
                     databaseService.insertApiMetadataField(
                             uniqueId,
@@ -64,6 +64,8 @@ public class AutoDiscovery {
                             fieldNode.get("path").asText()
                     );
                 }
+            } else {
+                System.out.println("DEBUG: No fields found in connection JSON; skipping field insertion.");
             }
             System.out.println("New API discovered and added to database: " + resourcePath);
         } catch (Exception e) {

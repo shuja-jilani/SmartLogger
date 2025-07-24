@@ -23,7 +23,7 @@ public class DatabaseService {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
 
-    public DatabaseService(JdbcTemplate jdbcTemplate,ConnectionRepository connectionRepository, ApiMetadataRepository apiMetadataRepository, ApiMetadataFieldRepository apiMetadataFieldRepository) {
+    public DatabaseService(JdbcTemplate jdbcTemplate, ConnectionRepository connectionRepository, ApiMetadataRepository apiMetadataRepository, ApiMetadataFieldRepository apiMetadataFieldRepository) {
         this.connectionRepository = connectionRepository;
         this.apiMetadataRepository = apiMetadataRepository;
         this.apiMetadataFieldRepository = apiMetadataFieldRepository;
@@ -70,11 +70,13 @@ public class DatabaseService {
         String sql = "INSERT INTO api_metadata (unique_id, connection_name, dataset, api_name, role_names, status, resource_path) VALUES (?, ?, ?, ?, ?, ?, ?)";
         jdbcTemplate.update(sql, uniqueId, connectionName, dataset, apiName, roleNames, status, resourcePath);
     }
+
     public void insertApiMetadataField(UUID apiMetadataId, String fieldName, String identifier, String datatype, String contentType, String keyStatus, String path) {
         String sql = "INSERT INTO api_metadata_field (api_metadata_id, field, identifier, datatype, content_type, key_status, path) VALUES (?, ?, ?, ?, ?, ?, ?)";
         jdbcTemplate.update(sql, apiMetadataId, fieldName, identifier, datatype, contentType, keyStatus, path);
     }
-//    public Map<String, List<String>> getDatasetsGroupedByConnection() {
+
+    //    public Map<String, List<String>> getDatasetsGroupedByConnection() {
 //        List<Connection> connections = connectionRepository.findAll();
 //        if (connections.isEmpty()) {
 //            return Collections.emptyMap(); // Return empty map if no connections found
@@ -100,46 +102,69 @@ public class DatabaseService {
 //
 //        return datasetsByConnection;
 //    }
-public List<Map<String, Object>> fetchTableData(Connection connection, String gte, String lte) throws Exception {
-    JsonNode details = objectMapper.readTree(connection.getDetails());
+    public List<Map<String, Object>> fetchTableData(Connection connection, String gte, String lte) throws Exception {
+        JsonNode details = objectMapper.readTree(connection.getDetails());
 
-    // Extract DB connection info
-    String host = details.get("host").asText();
-    int port = details.get("port").asInt();
-    String dbName = details.get("databaseName").asText();
-    String user = details.get("userName").asText();
-    String password = details.get("password").asText();
-    String tableName = details.get("tableName").asText();
+        // Extract DB connection info
+        String host = details.get("host").asText();
+        int port = details.get("port").asInt();
+        String dbName = details.get("databaseName").asText();
+        String user = details.get("userName").asText();
+        String password = details.get("password").asText();
+        String tableName = details.get("tableName").asText();
 
-    // Extract identifier for RequestTime column
-    String requestTimeColumn = "RequestTime"; // default fallback
-    for (JsonNode field : details.get("fields")) {
-        if ("RequestTime".equals(field.get("field").asText())) {
-            requestTimeColumn = field.get("identifier").asText();
-            break;
+        // Build JDBC URL
+        String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, dbName);
+
+        // Set up DataSource and JdbcTemplate
+        DriverManagerDataSource dataSource = new DriverManagerDataSource();
+        dataSource.setUrl(url);
+        dataSource.setUsername(user);
+        dataSource.setPassword(password);
+        dataSource.setDriverClassName("org.postgresql.Driver");
+
+        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+
+
+        // Check for presence of 'fields' or fallback to 'sqlQuery'
+        if (details.has("fields") && details.get("fields").isArray() && details.get("fields").size() > 0) {
+            //  Use dynamic time-based SQL (based on RequestTime field)
+            String requestTimeColumn = "RequestTime"; // default
+            for (JsonNode field : details.get("fields")) {
+                if ("RequestTime".equals(field.get("field").asText())) {
+                    requestTimeColumn = field.get("identifier").asText();
+                    break;
+                }
+            }
+
+            String sql = String.format("SELECT * FROM \"%s\" WHERE \"%s\" >= ? AND \"%s\" <= ?",
+                    tableName, requestTimeColumn, requestTimeColumn);
+
+            Timestamp gteTimestamp = Timestamp.valueOf(gte.replace("T", " "));
+            Timestamp lteTimestamp = Timestamp.valueOf(lte.replace("T", " "));
+
+            return jdbcTemplate.queryForList(sql, gteTimestamp, lteTimestamp);
+
+        } else if (details.has("sqlQuery") && !details.get("sqlQuery").isNull()) {
+            // Use SQL query from connection details
+            String sql = details.get("sqlQuery").asText();
+
+            // Convert gte/lte to Timestamp for use in parameterized SQL
+            Timestamp gteTimestamp = Timestamp.valueOf(gte.replace("T", " "));
+            Timestamp lteTimestamp = Timestamp.valueOf(lte.replace("T", " "));
+
+            //  Check if query contains '?' placeholders (naive but safe check)
+            int placeholderCount = sql.length() - sql.replace("?", "").length();
+            if (placeholderCount >= 2) {
+                // Query has parameter placeholders, bind gte and lte
+                return jdbcTemplate.queryForList(sql, gteTimestamp, lteTimestamp);
+            } else {
+                // If no placeholders — execute raw SQL without params
+                return jdbcTemplate.queryForList(sql);
+            }
+        }
+        else {
+            throw new IllegalStateException("No valid 'fields' or 'sqlQuery' found in connection details.");
         }
     }
-
-    // Build JDBC URL
-    String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, dbName);
-
-    // Set up DataSource and JdbcTemplate
-    DriverManagerDataSource dataSource = new DriverManagerDataSource();
-    dataSource.setUrl(url);
-    dataSource.setUsername(user);
-    dataSource.setPassword(password);
-    dataSource.setDriverClassName("org.postgresql.Driver");
-
-    JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
-
-    // Dynamic SQL query with time filtering
-    String sql = String.format("SELECT * FROM \"%s\" WHERE \"%s\" >= ? AND \"%s\" <= ?",
-            tableName, requestTimeColumn, requestTimeColumn);
-
-    Timestamp gteTimestamp = Timestamp.valueOf(gte.replace("T", " "));
-    Timestamp lteTimestamp = Timestamp.valueOf(lte.replace("T", " "));
-
-    return jdbcTemplate.queryForList(sql, gteTimestamp, lteTimestamp);
-
-}
 }

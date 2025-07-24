@@ -336,6 +336,104 @@ public class TransformDataService {
         return transformedData;
     }
 
+    public Map<String, Object> transformDBDataForQuery(JsonNode source, Connection connection) throws JsonProcessingException {
+        Map<String, Object> transformedData = new HashMap<>();
+
+        // Default format for timestamp conversion — to match Elasticsearch later
+        String requestPattern = "yyyy-MM-dd HH:mm:ss.SSS";
+
+        // Parse connection details
+        JsonNode details = objectMapper.readTree(connection.getDetails());
+
+        // --- Step 1: Extract ResourcePath directly ---
+        JsonNode resourcePathNode = source.get("ResourcePath"); //source.get("ResourcePath") works directly because of our alias in SQL.
+        if (resourcePathNode == null || resourcePathNode.isNull()) {
+            System.err.println("DEBUG: ResourcePath is missing, skipping record.");
+            return null;
+        }
+        String resourcePath = resourcePathNode.asText();
+
+        // --- Step 2: Check API existence in DB ---
+        ApiMetadata matchingApi = apiMetadataRepository.findByResourcePath(resourcePath);
+        if (matchingApi == null) {
+            // Auto-discover this API if not found
+            autoDiscovery.performAutoDiscovery(connection, resourcePath);
+            System.out.println("DEBUG: ResourcePath not found in DB, autoDiscovery triggered.");
+            return null;
+        }
+        // Skip if API is disabled
+        if ("disabled".equalsIgnoreCase(matchingApi.getStatus())) {
+            return null;
+        }
+
+
+        // Step 3: Build Request Block
+        ObjectNode requestBlock = objectMapper.createObjectNode();
+        if (source.has("RequestHeaders") && !source.get("RequestHeaders").isNull()) {
+            JsonNode requestHeaders = objectMapper.readTree(source.get("RequestHeaders").asText());
+            requestBlock.set("Headers", requestHeaders);
+        }
+        if (source.has("RequestPayload") && !source.get("RequestPayload").isNull()) {
+            requestBlock.put("payload", source.get("RequestPayload").asText());
+        }
+        transformedData.put("request", requestBlock);
+
+        // Step 4: Build Response Block
+        ObjectNode responseBlock = objectMapper.createObjectNode();
+        if (source.has("ResponseHeaders") && !source.get("ResponseHeaders").isNull()) {
+            JsonNode responseHeaders = objectMapper.readTree(source.get("ResponseHeaders").asText());
+            responseBlock.set("Headers", responseHeaders);
+        }
+        if (source.has("ResponsePayload") && !source.get("ResponsePayload").isNull()) {
+            responseBlock.put("payload", source.get("ResponsePayload").asText());
+        }
+        transformedData.put("response", responseBlock);
+
+        // Step 5: Static fields from API metadata
+        transformedData.put("APIName", matchingApi.getApi_name());
+        transformedData.put("ResourcePath", matchingApi.getResourcePath());
+
+        // Add Role Names as array
+        String roleNames = matchingApi.getRoleNames();
+        if (roleNames != null && !roleNames.isEmpty()) {
+            List<String> roles = Arrays.asList(roleNames.split(","));
+            ArrayNode rolesArrayNode = objectMapper.createArrayNode();
+            roles.forEach(role -> rolesArrayNode.add(role.trim()));
+            transformedData.put("Role", rolesArrayNode);
+        }
+
+        // Step 6: Direct mappings from source
+        transformedData.put("TransactionID", source.get("TransactionID").asText());
+        transformedData.put("Status", source.get("Status").asText(""));
+        transformedData.put("Host", source.get("Host").asText(""));
+
+        // Step 7: Timestamp parsing, reformatting, and elapsed time
+        try {
+            DateTimeFormatter formatter = DateTimeFormatter.ofPattern(requestPattern);
+            String reqStr = source.get("RequestTime").asText();
+            String resStr = source.get("ResponseTime").asText();
+
+            LocalDateTime requestDateTime = LocalDateTime.parse(reqStr, formatter);
+            LocalDateTime responseDateTime = LocalDateTime.parse(resStr, formatter);
+
+            // Reformat to include 'T' for Elasticsearch
+            DateTimeFormatter isoFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
+            transformedData.put("RequestTime", requestDateTime.format(isoFormatter));
+            transformedData.put("ResponseTime", responseDateTime.format(isoFormatter));
+
+            // Compute ElapsedTime
+            long elapsed = Duration.between(requestDateTime, responseDateTime).toMillis();
+            transformedData.put("ElapsedTime", elapsed);
+        } catch (Exception e) {
+            System.err.println("Timestamp parsing error: " + e.getMessage());
+            transformedData.put("RequestTime", null);
+            transformedData.put("ResponseTime", null);
+            transformedData.put("ElapsedTime", null);
+        }
+
+        return transformedData;
+    }
+
 
     private Optional<JsonNode> getValueFromPath(JsonNode node, String path) {
         String[] keys = path.split("\\.");
@@ -349,6 +447,7 @@ public class TransformDataService {
         }
         return Optional.ofNullable(current);
     }
+
 
 }
 
